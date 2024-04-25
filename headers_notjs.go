@@ -25,6 +25,12 @@ type headerList []header2
 // To get a structured field value given a header name name and a string type
 // from a header list list, run these steps. They return null or a structured
 // field value.
+//
+// Get a structured field value intentionally does not distinguish between a
+// header not being present and its value failing to parse as a structured field
+// value. This ensures uniform processing across the web platform.
+//
+// https://fetch.spec.whatwg.org/#concept-header-list-get-structured-header
 func (h headerList) GetStructuredHeader(name headerName, type_ string) rfc8941.StructuredFieldValue {
 	// 1. Assert: type is one of "dictionary", "list", or "item".
 	if !slices.Contains([]string{"dictionary", "list", "item"}, type_) {

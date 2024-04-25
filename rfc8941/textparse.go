@@ -223,15 +223,16 @@ https://httpwg.org/specs/rfc8941.html#parse-dictionary
 */
 
 type ItemOrInnerList = any
+type Dictionary = []tuple.T2[string, tuple.T2[ItemOrInnerList, Parameters]]
 
 // Given an ASCII string as input_string, return an ordered map whose values are (item_or_inner_list, parameters) tuples. input_string is modified to remove the parsed value.
 //
 // Note that when duplicate Dictionary keys are encountered, all but the last instance are ignored.
 //
 // https://httpwg.org/specs/rfc8941.html#parse-dictionary
-func ParseDictionary(inputString *string) (map[string]tuple.T2[ItemOrInnerList, Parameters], error) {
+func ParseDictionary(inputString *string) (Dictionary, error) {
 	// 1. Let dictionary be an empty, ordered map.
-	dictionary := map[string]tuple.T2[ItemOrInnerList, Parameters]{}
+	dictionary := []tuple.T2[string, tuple.T2[ItemOrInnerList, Parameters]]{}
 	// 2. While input_string is not empty:
 	for *inputString != "" {
 
@@ -271,11 +272,18 @@ func ParseDictionary(inputString *string) (map[string]tuple.T2[ItemOrInnerList, 
 		}
 
 		// 4. If dictionary already contains a key this_key (comparing character for character), overwrite its value with member.
-		if _, ok := dictionary[thisKey]; ok {
-			dictionary[thisKey] = member
+		foundIndex := -1
+		for i, d := range dictionary {
+			if d.V1 == thisKey {
+				foundIndex = i
+				break
+			}
+		}
+		if foundIndex != -1 {
+			dictionary[foundIndex] = tuple.New2(thisKey, member)
 		} else {
 			// 5. Otherwise, append key this_key with value member to dictionary.
-			dictionary[thisKey] = member
+			dictionary = append(dictionary, tuple.New2(thisKey, member))
 		}
 
 		// 6. Discard any leading OWS characters from input_string.
