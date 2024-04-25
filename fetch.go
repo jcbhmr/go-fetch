@@ -1,77 +1,95 @@
 package fetch
 
 import (
-	"fmt"
-	"regexp"
-
-	"github.com/barweiss/go-tuple"
+	"context"
+	"io"
+	"net/http"
+	"net/url"
 )
 
-type HeadersInit interface {
-	[][]string | map[string]string
-}
 
-type Headers struct {
+
+type conceptRequest struct {
+	method     string
+	url        *url.URL
 	headerList map[string]string
-	guardImmutable      bool
+	body       *io.Reader
+	keepalive  bool
 }
 
-func NewHeaders[THeadersInit HeadersInit](init THeadersInit) *Headers {
-	h := &Headers{
-		headerList: map[string]string{},
-		guardImmutable: false,
-	}
-	switch v := any(init).(type) {
-	case nil: {}
-	case [][]string:
-		for _, tuple := range v {
-			var name string
-			if len(tuple) >= 1 {
-				name = tuple[0]
-			}
-			var value string
-			if len(tuple) >= 2 {
-				value = tuple[1]
-			}
-			h.Set(name, value)
-		}
-	case map[string]string:
-		for name, value := range v {
-			h.Set(name, value)
-		}
-	default:
-		panic(fmt.Errorf("unexpected type: %T", init))
-	}
-	return h
+type Request struct {
+	request *conceptRequest
+	headers *Headers
+	signal  *context.Context
+	body    *io.Reader
 }
 
-func (h *Headers) Append(name string, value string) {
-	h.Set(name, value)
-}
-
-func (h *Headers) Delete(name string) {
-	delete(h.headerList, name)
-}
-
-func (h *Headers) Get(name string) *string {
-	value, ok := h.headerList[name]
-	if ok {
-		return &value
+func NewRequest(input string, init *RequestInit) *Request {
+	var headers *Headers
+	if init != nil && init.Headers != nil {
+		headers = init.Headers
 	} else {
-		return nil
+		headers = NewHeaders(nil)
+	}
+	url, err := url.Parse(input)
+	if err != nil {
+		panic(err)
+	}
+	var method string
+	if init != nil && init.Method != nil {
+		method = *init.Method
+	} else {
+		method = "GET"
+	}
+	return &Request{
+		request: &conceptRequest{
+			method:     method,
+			url:        url,
+			headerList: headers.headerList,
+			body:       nil,
+			keepalive:  false,
+		},
+		headers: headers,
+		signal:  nil,
+		body:    nil,
 	}
 }
 
-func (h *Headers) Set(name string, value string) {
-	h.headerList[name] = value
+type RequestInit struct {
+	Method         *string
+	Headers        *Headers
+	Body           **string
+	Referrer       *string
+	ReferrerPolicy *string
+	Mode           *string
+	Credentials    *string
+	Cache          *string
+	Redirect       *string
+	Integrity      *string
+	Keepalive      *bool
+	Signal         *context.Context
+	Duplex         *string
+	Priority       *string
+	Window         *any
 }
 
-func (h *Headers) Iterable() map[string]string {
-	iterable := map[string]string{}
-	for name, value := range h.headerList {
-		iterable[name] = value
-	}
-	return iterable
+type Response struct{}
+
+type FetchResult struct {
+	*Response
+	Err error
 }
 
-func Fetch() {}
+func Fetch(input string, init *RequestInit) <-chan FetchResult {
+	c := make(chan FetchResult)
+	go func() {
+		defer close(c)
+		res, err := http.Get(input)
+		if err != nil {
+			c <- FetchResult{Response: nil, Err: err}
+			return
+		}
+		c <- FetchResult{Response: &Response{}, Err: nil}
+	}()
+	return c
+}
