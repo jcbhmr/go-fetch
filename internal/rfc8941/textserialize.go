@@ -4,13 +4,248 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/jcbhmr/go-fetch/rfc5234"
-	"github.com/jcbhmr/go-fetch/rfc7230"
+	"github.com/jcbhmr/go-fetch/internal/rfc5234"
+	"github.com/jcbhmr/go-fetch/internal/rfc7230"
 	"golang.org/x/exp/utf8string"
+	"github.com/samber/lo"
 )
+
+/*
+# 4. Working with Structured Fields in HTTP
+
+This section defines how to serialize and parse Structured Fields in textual
+HTTP field values and other encodings compatible with them (e.g., in HTTP/2
+[RFC7540] before compression with HPACK [RFC7541]).
+
+https://httpwg.org/specs/rfc8941.html#text
+*/
+
+/*
+# 4.1. Serializing Structured Fields
+
+https://httpwg.org/specs/rfc8941.html#text-serialize
+*/
+
+type List = []lo.Tuple2[ItemOrInnerList, Parameters]
+type Item = lo.Tuple2[BareItem, Parameters]
+
+// Given a structure defined in this specification, return an ASCII string suitable for use in an HTTP field value.
+//
+// https://httpwg.org/specs/rfc8941.html#text-serialize
+func TextSerialize(input any) ([]byte, error) {
+	// 1. If the structure is a Dictionary or List and its value is empty (i.e., it has no members), do not serialize the field at all (i.e., omit both the field-name and field-value).
+	if _, ok := input.(Dictionary); ok {
+		if len(input.(Dictionary)) == 0 {
+			return nil, nil
+		}
+	}
+	if _, ok := input.(List); ok {
+		if len(input.(List)) == 0 {
+			return nil, nil
+		}
+	}
+
+	var outputString string
+	// 2. If the structure is a List, let output_string be the result of running Serializing a List (Section 4.1.1) with the structure.
+	if v, ok := input.(List); ok {
+		res, err := SerList(v)
+		if err != nil {
+			return nil, err
+		}
+		outputString = res
+	} else if v, ok := input.(Dictionary); ok {
+		// 3. Else, if the structure is a Dictionary, let output_string be the result of running Serializing a Dictionary (Section 4.1.2) with the structure.
+		res, err := SerDictionary(v)
+		if err != nil {
+			return nil, err
+		}
+		outputString = res
+	} else if v, ok := input.(Item); ok {
+		// 4. Else, if the structure is an Item, let output_string be the result of running Serializing an Item (Section 4.1.3) with the structure.
+		res, err := SerItem(v.A, v.B)
+		if err != nil {
+			return nil, err
+		}
+		outputString = res
+	} else {
+		// 5. Else, fail serialization.
+		return nil, fmt.Errorf("serialization failed: %#+v", input)
+	}
+
+	// 6. Return output_string converted into an array of bytes, using ASCII encoding [RFC0020].
+	return []byte(outputString), nil
+}
+
+/*
+# 4.1.1. Serializing a List
+
+https://httpwg.org/specs/rfc8941.html#ser-list
+*/
+
+// Given an array of (member_value, parameters) tuples as input_list, return an ASCII string suitable for use in an HTTP field value.
+//
+// https://httpwg.org/specs/rfc8941.html#ser-list
+func SerList(inputList []lo.Tuple2[ItemOrInnerList, Parameters]) (string, error) {
+	// 1. Let output be an empty string.
+	output := ""
+	// 2. For each (member_value, parameters) of input_list:
+	for i, keyValue := range inputList {
+		memberValue := keyValue.A
+		parameters := keyValue.B
+
+		// 1. If member_value is an array, append the result of running Serializing an Inner List (Section 4.1.1.1) with (member_value, parameters) to output.
+		if _, ok := memberValue.([]any); ok {
+			innerListStr, err := SerInnerList(memberValue.(InnerList), parameters)
+			if err != nil {
+				return "", err
+			}
+			output += innerListStr
+		} else {
+			// 2. Otherwise, append the result of running Serializing an Item (Section 4.1.3) with (member_value, parameters) to output.
+			itemStr, err := SerItem(memberValue, parameters)
+			if err != nil {
+				return "", err
+			}
+			output += itemStr
+
+			// 3. If more member_values remain in input_list:
+			if i < len(inputList)-1 {
+				// 1. Append "," to output.
+				output += ","
+				// 2. Append a single SP to output.
+				output += " "
+			}
+		}
+	}
+	// 3. Return output.
+	return output, nil
+}
+
+/*
+# 4.1.1.1. Serializing an Inner List
+
+https://httpwg.org/specs/rfc8941.html#ser-innerlist
+*/
+
+// Given an array of (member_value, parameters) tuples as inner_list, and parameters as list_parameters, return an ASCII string suitable for use in an HTTP field value.
+//
+// https://httpwg.org/specs/rfc8941.html#ser-innerlist
+func SerInnerList(innerList InnerList, listParameters Parameters) (string, error) {
+	// 1. Let output be the string "(".
+	output := "("
+	// 2. For each (member_value, parameters) of inner_list:
+	for i, keyValue := range innerList {
+		memberValue := keyValue.A
+		parameters := keyValue.B
+
+		// 1. Append the result of running Serializing an Item (Section 4.1.3) with (member_value, parameters) to output.
+		itemStr, err := SerItem(memberValue, parameters)
+		if err != nil {
+			return "", err
+		}
+		output += itemStr
+
+		// 2. If more values remain in inner_list, append a single SP to output.
+		if i < len(innerList)-1 {
+			output += " "
+		}
+	}
+
+	// 3. Append ")" to output.
+	output += ")"
+	// 4. Append the result of running Serializing Parameters (Section 4.1.1.2) with list_parameters to output.
+	listParametersStr, err := SerParams(listParameters)
+	if err != nil {
+		return "", err
+	}
+	output += listParametersStr
+	// 5. Return output.
+	return output, nil
+}
+
+/*
+# 4.1.1.2. Serializing Parameters
+
+https://httpwg.org/specs/rfc8941.html#ser-params
+*/
+
+// Given an ordered Dictionary as input_parameters (each member having a param_key and a param_value), return an ASCII string suitable for use in an HTTP field value.
+//
+// https://httpwg.org/specs/rfc8941.html#ser-params
+func SerParams(inputParameters Parameters) (string, error) {
+	// 1. Let output be an empty string.
+	output := ""
+	// 2. For each param_key with a value of param_value in input_parameters:
+	for _, keyValue := range inputParameters {
+		paramKey := keyValue.A
+		paramValue := keyValue.B
+
+		// 3. Append ";" to output.
+		output += ";"
+
+		// 4. Append the result of running Serializing a Key (Section 4.1.1.3) with param_key to output.
+		paramKeyStr, err := SerKey(paramKey)
+		if err != nil {
+			return "", err
+		}
+		output += paramKeyStr
+
+		// 5. If param_value is not Boolean true:
+		if value, ok := paramValue.(bool); !ok || !value {
+			// 1. Append "=" to output.
+			output += "="
+			// 2. Append the result of running Serializing a bare Item (Section 4.1.3.1) with param_value to output.
+			paramValueStr, err := SerBareItem(paramValue)
+			if err != nil {
+				return "", err
+			}
+			output += paramValueStr
+		}
+	}
+
+	// 3. Return output.
+	return output, nil
+}
+
+/*
+# 4.1.1.3. Serializing a Key
+
+https://httpwg.org/specs/rfc8941.html#ser-key
+*/
+
+// Given a key as input_key, return an ASCII string suitable for use in an HTTP field value.
+//
+// https://httpwg.org/specs/rfc8941.html#ser-key
+func SerKey(inputKey Key) (string, error) {
+	// 1. Convert input_key into a sequence of ASCII characters; if conversion fails, fail serialization.
+	value := string(inputKey)
+	if !utf8string.NewString(value).IsASCII() {
+		return "", fmt.Errorf("serialization failed: %#+v", inputKey)
+	}
+
+	// 2. If input_key contains characters not in lcalpha, DIGIT, "_", "-", ".", or "*", fail serialization.
+	for _, r := range value {
+		if regexp.MustCompile(`[^a-z0-9_\-.*]`).MatchString(string(r)) {
+			return "", fmt.Errorf("serialization failed: %#+v", inputKey)
+		}
+	}
+
+	// 3. If the first character of input_key is not lcalpha or "*", fail serialization.
+	if !regexp.MustCompile(`^[a-z*]`).MatchString(value[:1]) {
+		return "", fmt.Errorf("serialization failed: %#+v", inputKey)
+	}
+
+	// 4. Let output be an empty string.
+	output := ""
+	// 5. Append input_key to output.
+	output += value
+	// 6. Return output.
+	return output, nil
+}
 
 /*
 # 4.1.2. Serializing a Dictionary
@@ -26,9 +261,9 @@ func SerDictionary(inputDictionary Dictionary) (string, error) {
 	output := ""
 	// 2. For each member_key with a value of (member_value, parameters) in input_dictionary:
 	for i, keyValue := range inputDictionary {
-		memberKey := keyValue.V1
-		memberValue := keyValue.V2.V1
-		parameters := keyValue.V2.V2
+		memberKey := keyValue.A
+		memberValue := keyValue.B.A
+		parameters := keyValue.B.B
 
 		// 1. Append the result of running Serializing a Key (Section 4.1.1.3) with member's member_key to output.
 		memberKeyStr, err := SerKey(memberKey)
@@ -40,24 +275,24 @@ func SerDictionary(inputDictionary Dictionary) (string, error) {
 		// 2. If member_value is Boolean true:
 		if value, ok := memberValue.(bool); ok && value {
 			// 1. Append the result of running Serializing Parameters (Section 4.1.1.2) with parameters to output.
-			parametersStr, err := SerParameters(parameters)
+			parametersStr, err := SerParams(parameters)
 			if err != nil {
 				return "", err
 			}
 			output += parametersStr
 		} else {
-		// 3. Otherwise:
+			// 3. Otherwise:
 			// 1. Append "=" to output.
 			output += "="
 			// 2. If member_value is an array, append the result of running Serializing an Inner List (Section 4.1.1.1) with (member_value, parameters) to output.
-			if _, ok := memberValue.([]any); ok {
-				innerListStr, err := SerInnerList(memberValue, parameters)
+			if v, ok := memberValue.(InnerList); ok {
+				innerListStr, err := SerInnerList(v, parameters)
 				if err != nil {
 					return "", err
 				}
 				output += innerListStr
 			} else {
-			// 3. Otherwise, append the result of running Serializing an Item (Section 4.1.3) with (member_value, parameters) to output.
+				// 3. Otherwise, append the result of running Serializing an Item (Section 4.1.3) with (member_value, parameters) to output.
 				itemStr, err := SerItem(memberValue, parameters)
 				if err != nil {
 					return "", err
@@ -98,7 +333,7 @@ func SerItem(bareItem any, itemParameters Parameters) (string, error) {
 	output += bareItemStr
 
 	// 3. Append the result of running Serializing Parameters (Section 4.1.1.2) with item_parameters to output.
-	itemParametersStr, err := SerParameters(itemParameters)
+	itemParametersStr, err := SerParams(itemParameters)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +435,7 @@ func SerDecimal(inputDecimal any) (string, error) {
 	}
 
 	// 2. If input_decimal has more than three significant digits to the right of the decimal point, round it to three decimal places, rounding the final digit to the nearest value, or to the even value if it is equidistant.
-	value = math.RoundToEven(value * 1000) / 1000
+	value = math.RoundToEven(value*1000) / 1000
 
 	// 3. If input_decimal has more than 12 significant digits to the left of the decimal point after rounding, fail serialization.
 	if value > 999999999999 {
@@ -231,7 +466,7 @@ func SerDecimal(inputDecimal any) (string, error) {
 		// 9. Otherwise, append the significant digits of input_decimal's fractional component represented in base 10 (using only decimal digits) to output.
 		output += strings.TrimRight(strconv.FormatFloat(fractional, 'f', -1, 64), "0")
 	}
-	
+
 	// 10. Return output.
 	return output, nil
 }

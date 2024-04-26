@@ -1,4 +1,3 @@
-// go-fetch-specific code related to RFC 5234. This is not a complete implementation of RFC 5234.
 package rfc5234
 
 import "regexp"

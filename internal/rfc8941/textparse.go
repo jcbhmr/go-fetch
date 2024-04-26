@@ -1,4 +1,3 @@
-// go-fetch-specific code related to RFC 8941. This is not a complete implementation of RFC 8941.
 package rfc8941
 
 import (
@@ -8,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/barweiss/go-tuple"
-	"github.com/jcbhmr/go-fetch/rfc7230"
+	"github.com/jcbhmr/go-fetch/internal/rfc7230"
 	"golang.org/x/exp/utf8string"
+	"github.com/samber/lo"
 )
 
 /*
@@ -23,21 +22,42 @@ https://httpwg.org/specs/rfc8941.html#text-parse
 
 type StructuredFieldValue = any
 
-// Given an array of bytes as input_bytes that represent the chosen field's field-value (which is empty if that field is not present) and field_type (one of "dictionary", "list", or "item"), return the parsed header value.
+// Given an array of bytes as input_bytes that represent the chosen field's
+// field-value (which is empty if that field is not present) and field_type (one
+// of "dictionary", "list", or "item"), return the parsed header value.
 //
-// For Lists and Dictionaries, this has the effect of correctly concatenating all of the field's lines, as long as individual members of the top-level data structure are not split across multiple header instances. The parsing algorithms for both types allow tab characters, since these might be used to combine field lines by some implementations.
+// For Lists and Dictionaries, this has the effect of correctly concatenating
+// all of the field's lines, as long as individual members of the top-level data
+// structure are not split across multiple header instances. The parsing
+// algorithms for both types allow tab characters, since these might be used to
+// combine field lines by some implementations.
 //
-// Strings split across multiple field lines will have unpredictable results, because one or more commas (with optional whitespace) will become part of the string output by the parser. Since concatenation might be done by an upstream intermediary, the results are not under the control of the serializer or the parser, even when they are both under the control of the same party.
+// Strings split across multiple field lines will have unpredictable results,
+// because one or more commas (with optional whitespace) will become part of the
+// string output by the parser. Since concatenation might be done by an upstream
+// intermediary, the results are not under the control of the serializer or the
+// parser, even when they are both under the control of the same party.
 //
-// Tokens, Integers, Decimals, and Byte Sequences cannot be split across multiple field lines because the inserted commas will cause parsing to fail.
+// Tokens, Integers, Decimals, and Byte Sequences cannot be split across
+// multiple field lines because the inserted commas will cause parsing to fail.
 //
-// Parsers MAY fail when processing a field value spread across multiple field lines, when one of those lines does not parse as that field. For example, a parsing handling an Example-String field that's defined as an sf-string is allowed to fail when processing this field section:
+// Parsers MAY fail when processing a field value spread across multiple field
+// lines, when one of those lines does not parse as that field. For example, a
+// parsing handling an Example-String field that's defined as an sf-string is
+// allowed to fail when processing this field section:
 //
-// Example-String: "foo
-// Example-String: bar"
-// If parsing fails -- including when calling another algorithm -- the entire field value MUST be ignored (i.e., treated as if the field were not present in the section). This is intentionally strict, to improve interoperability and safety, and specifications referencing this document are not allowed to loosen this requirement.
+//     Example-String: "foo
+//     Example-String: bar"
 //
-// Note that this requirement does not apply to an implementation that is not parsing the field; for example, an intermediary is not required to strip a failing field from a message before forwarding it.
+// If parsing fails -- including when calling another algorithm -- the entire
+// field value MUST be ignored (i.e., treated as if the field were not present
+// in the section). This is intentionally strict, to improve interoperability
+// and safety, and specifications referencing this document are not allowed to
+// loosen this requirement.
+//
+// Note that this requirement does not apply to an implementation that is not
+// parsing the field; for example, an intermediary is not required to strip a
+// failing field from a message before forwarding it.
 //
 // https://httpwg.org/specs/rfc8941.html#text-parse
 func TextParse(inputBytes []byte, fieldType string) (StructuredFieldValue, error) {
@@ -89,10 +109,10 @@ https://httpwg.org/specs/rfc8941.html#parse-list
 // Given an ASCII string as input_string, return an array of (item_or_inner_list, parameters) tuples. input_string is modified to remove the parsed value.
 //
 // https://httpwg.org/specs/rfc8941.html#parse-list
-func ParseList(inputString *string) ([]tuple.T2[ItemOrInnerList, Parameters], error) {
+func ParseList(inputString *string) ([]lo.Tuple2[ItemOrInnerList, Parameters], error) {
 
 	// 1.  Let members be an empty array.
-	members := []tuple.T2[ItemOrInnerList, Parameters]{}
+	members := []lo.Tuple2[ItemOrInnerList, Parameters]{}
 
 	// 2.  While input_string is not empty:
 	for *inputString != "" {
@@ -141,14 +161,14 @@ https://httpwg.org/specs/rfc8941.html#parse-item-or-list
 // Given an ASCII string as input_string, return the tuple (item_or_inner_list, parameters), where item_or_inner_list can be either a single bare item or an array of (bare_item, parameters) tuples. input_string is modified to remove the parsed value.
 //
 // https://httpwg.org/specs/rfc8941.html#parse-item-or-list
-func ParseItemOrList(inputString *string) (tuple.T2[ItemOrInnerList, Parameters], error) {
+func ParseItemOrList(inputString *string) (lo.Tuple2[ItemOrInnerList, Parameters], error) {
 	// 1.  If the first character of input_string is "(", return the result of running Parsing an Inner List (Section 4.2.1.2) with input_string.
 	if (*inputString)[0] == '(' {
 		res, err := ParseInnerList(inputString)
 		if err != nil {
-			return tuple.New2[ItemOrInnerList, Parameters](nil, nil), err
+			return lo.T2[ItemOrInnerList, Parameters](nil, nil), err
 		}
-		return tuple.New2[ItemOrInnerList, Parameters](res.V1, res.V2), nil
+		return lo.T2[ItemOrInnerList, Parameters](res.A, res.B), nil
 	}
 
 	// 2.  Return the result of running Parsing an Item (Section 4.2.3) with input_string.
@@ -161,21 +181,21 @@ func ParseItemOrList(inputString *string) (tuple.T2[ItemOrInnerList, Parameters]
 https://httpwg.org/specs/rfc8941.html#parse-innerlist
 */
 
-type InnerList = []tuple.T2[BareItem, Parameters]
+type InnerList = []lo.Tuple2[BareItem, Parameters]
 
 // Given an ASCII string as input_string, return the tuple (inner_list, parameters), where inner_list is an array of (bare_item, parameters) tuples. input_string is modified to remove the parsed value.
 //
 // https://httpwg.org/specs/rfc8941.html#parse-innerlist
-func ParseInnerList(inputString *string) (tuple.T2[InnerList, Parameters], error) {
+func ParseInnerList(inputString *string) (lo.Tuple2[InnerList, Parameters], error) {
 	// 1.  Consume the first character of input_string; if it is not "(", fail parsing.
 	firstChar := (*inputString)[0]
 	*inputString = (*inputString)[1:]
 	if firstChar != '(' {
-		return tuple.New2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
+		return lo.T2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
 	}
 
 	// 2.  Let inner_list be an empty array.
-	innerList := []tuple.T2[any, Parameters]{}
+	innerList := []lo.Tuple2[any, Parameters]{}
 
 	// 3.  While input_string is not empty:
 	for *inputString != "" {
@@ -192,11 +212,11 @@ func ParseInnerList(inputString *string) (tuple.T2[InnerList, Parameters], error
 			//         2.  Let parameters be the result of running Parsing Parameters (Section 4.2.3.2) with input_string.
 			parameters, err := ParseParam(inputString)
 			if err != nil {
-				return tuple.New2[InnerList, Parameters](nil, nil), err
+				return lo.T2[InnerList, Parameters](nil, nil), err
 			}
 
 			//         3.  Return the tuple (inner_list, parameters).
-			return tuple.New2(innerList, parameters), nil
+			return lo.T2(innerList, parameters), nil
 		}
 
 		//     3.  Let item be the result of running Parsing an Item (Section 4.2.3) with input_string.
@@ -207,13 +227,13 @@ func ParseInnerList(inputString *string) (tuple.T2[InnerList, Parameters], error
 
 		//     5.  If the first character of input_string is not SP or ")", fail parsing.
 		if (*inputString)[0] != ' ' && (*inputString)[0] != ')' {
-			return tuple.New2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
+			return lo.T2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
 
 		}
 	}
 
 	// 4.  The end of the Inner List was not found; fail parsing.
-	return tuple.New2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
+	return lo.T2[InnerList, Parameters](nil, nil), fmt.Errorf("parsing failed: %s", *inputString)
 }
 
 /*
@@ -223,7 +243,7 @@ https://httpwg.org/specs/rfc8941.html#parse-dictionary
 */
 
 type ItemOrInnerList = any
-type Dictionary = []tuple.T2[string, tuple.T2[ItemOrInnerList, Parameters]]
+type Dictionary = []lo.Tuple2[string, lo.Tuple2[ItemOrInnerList, Parameters]]
 
 // Given an ASCII string as input_string, return an ordered map whose values are (item_or_inner_list, parameters) tuples. input_string is modified to remove the parsed value.
 //
@@ -232,7 +252,7 @@ type Dictionary = []tuple.T2[string, tuple.T2[ItemOrInnerList, Parameters]]
 // https://httpwg.org/specs/rfc8941.html#parse-dictionary
 func ParseDictionary(inputString *string) (Dictionary, error) {
 	// 1. Let dictionary be an empty, ordered map.
-	dictionary := []tuple.T2[string, tuple.T2[ItemOrInnerList, Parameters]]{}
+	dictionary := []lo.Tuple2[string, lo.Tuple2[ItemOrInnerList, Parameters]]{}
 	// 2. While input_string is not empty:
 	for *inputString != "" {
 
@@ -242,7 +262,7 @@ func ParseDictionary(inputString *string) (Dictionary, error) {
 			return nil, err
 		}
 
-		var member tuple.T2[any, Parameters]
+		var member lo.Tuple2[any, Parameters]
 		var value any
 
 		// 2. If the first character of input_string is "=":
@@ -268,22 +288,22 @@ func ParseDictionary(inputString *string) (Dictionary, error) {
 			}
 
 			// 3. Let member be the tuple (value, parameters).
-			member = tuple.New2(value, parameters)
+			member = lo.T2(value, parameters)
 		}
 
 		// 4. If dictionary already contains a key this_key (comparing character for character), overwrite its value with member.
 		foundIndex := -1
 		for i, d := range dictionary {
-			if d.V1 == thisKey {
+			if d.A == thisKey {
 				foundIndex = i
 				break
 			}
 		}
 		if foundIndex != -1 {
-			dictionary[foundIndex] = tuple.New2(thisKey, member)
+			dictionary[foundIndex] = lo.T2(thisKey, member)
 		} else {
 			// 5. Otherwise, append key this_key with value member to dictionary.
-			dictionary = append(dictionary, tuple.New2(thisKey, member))
+			dictionary = append(dictionary, lo.T2(thisKey, member))
 		}
 
 		// 6. Discard any leading OWS characters from input_string.
@@ -323,21 +343,21 @@ https://httpwg.org/specs/rfc8941.html#parse-item
 // Given an ASCII string as input_string, return a (bare_item, parameters) tuple. input_string is modified to remove the parsed value.
 //
 // https://httpwg.org/specs/rfc8941.html#parse-item
-func ParseItem(inputString *string) (tuple.T2[BareItem, Parameters], error) {
+func ParseItem(inputString *string) (lo.Tuple2[BareItem, Parameters], error) {
 	// 1. Let bare_item be the result of running Parsing a Bare Item (Section 4.2.3.1) with input_string.
 	bareItem, err := ParseBareItem(inputString)
 	if err != nil {
-		return tuple.New2[any, Parameters](nil, nil), err
+		return lo.T2[any, Parameters](nil, nil), err
 	}
 
 	// 2. Let parameters be the result of running Parsing Parameters (Section 4.2.3.2) with input_string.
 	parameters, err := ParseParam(inputString)
 	if err != nil {
-		return tuple.New2[any, Parameters](nil, nil), err
+		return lo.T2[any, Parameters](nil, nil), err
 	}
 
 	// 3. Return the tuple (bare_item, parameters).
-	return tuple.New2(bareItem, parameters), nil
+	return lo.T2(bareItem, parameters), nil
 }
 
 /*
@@ -379,7 +399,7 @@ func ParseBareItem(inputString *string) (BareItem, error) {
 https://httpwg.org/specs/rfc8941.html#parse-param
 */
 
-type Parameters = []tuple.T2[string, BareItem]
+type Parameters = []lo.Tuple2[string, BareItem]
 
 // Given an ASCII string as input_string, return an ordered map whose values are bare Items. input_string is modified to remove the parsed value.
 //
@@ -388,7 +408,7 @@ type Parameters = []tuple.T2[string, BareItem]
 // https://httpwg.org/specs/rfc8941.html#parse-param
 func ParseParam(inputString *string) (Parameters, error) {
 	// 1. Let parameters be an empty, ordered map.
-	parameters := []tuple.T2[string, any]{}
+	parameters := []lo.Tuple2[string, any]{}
 
 	// 2. While input_string is not empty:
 	for *inputString != "" {
@@ -423,16 +443,16 @@ func ParseParam(inputString *string) (Parameters, error) {
 		// 7. If parameters already contains a key param_key (comparing character for character), overwrite its value with param_value.
 		index := -1
 		for i, p := range parameters {
-			if p.V1 == paramKey {
+			if p.A == paramKey {
 				index = i
 				break
 			}
 		}
 		if index != -1 {
-			parameters[index] = tuple.New2(paramKey, paramValue)
+			parameters[index] = lo.T2(paramKey, paramValue)
 		} else {
 			// 8. Otherwise, append key param_key with value param_value to parameters.
-			parameters = append(parameters, tuple.New2(paramKey, paramValue))
+			parameters = append(parameters, lo.T2(paramKey, paramValue))
 		}
 	}
 	// 3. Return parameters.

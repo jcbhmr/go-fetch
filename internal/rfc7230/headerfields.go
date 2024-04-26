@@ -1,4 +1,3 @@
-// go-fetch-specific code related to RFC 7230. This is not a complete implementation of RFC 7230.
 package rfc7230
 
 import "regexp"

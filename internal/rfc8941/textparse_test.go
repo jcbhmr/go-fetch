@@ -1,13 +1,11 @@
-package rfc8941
+package rfc8941_test
 
 import (
 	"encoding/json"
 	"testing"
-)
 
-func ptr[T any](v T) *T {
-	return &v
-}
+	"github.com/jcbhmr/go-fetch/internal/rfc8941"
+)
 
 func mustMarshal(v any) []byte {
 	b, err := json.Marshal(v)
@@ -34,7 +32,7 @@ func TestTextParse(t *testing.T) {
 			t.Logf("InputBytes=%q", tt.InputBytes)
 			t.Logf("FieldType=%#+v", tt.FieldType)
 			t.Logf("MustFail=%#+v", tt.MustFail)
-			value, err := TextParse(tt.InputBytes, tt.FieldType)
+			value, err := rfc8941.TextParse(tt.InputBytes, tt.FieldType)
 			t.Logf("value=%s", mustMarshal(value))
 			t.Logf("err=%#+v", err)
 			if tt.MustFail && err == nil {
